@@ -8,6 +8,10 @@ This plugin allows you to control react-native-mmkv from flipper
 
 Simply search for 'react-native-mmkv' in the `Plugin Manager` in Flipper.
 
+<p align="center">
+    <img src="./.github/img/install.png" alt="install plugin" height="400" />
+</p>
+
 ### In your react-native App
 
 ```sh
@@ -23,3 +27,7 @@ const instance = new MMKV();
 // add this line inside your App.tsx
 useMMKVFlipper(storage);
 ```
+
+## Screenshot
+
+![view](./.github/img/flipper.png)
