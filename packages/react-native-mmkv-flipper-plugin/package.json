@@ -1,0 +1,20 @@
+{
+  "name": "react-native-mmkv-flipper-plugin",
+  "version": "0.0.1",
+  "description": "React Native's MMKV debugger for Flipper",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "peerDependencies": {
+    "react-native-flipper": ">=0.99.0",
+    "react-native-mmkv": ">=1.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "17.0.10",
+    "@types/react": "17.0.38",
+    "react": "17.0.2",
+    "react-native-flipper": "0.129.0",
+    "react-native-mmkv": "2.0.0",
+    "typescript": "4.5.5"
+  }
+}
