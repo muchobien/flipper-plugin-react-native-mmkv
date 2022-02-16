@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect, useMemo } from "react";
 import {
   createDataSource,
   createState,
@@ -12,31 +12,38 @@ import {
   usePlugin,
   useValue,
 } from "flipper-plugin";
-import { Button, Form, Input, Menu } from "antd";
+import { Button, Form, Input, Menu, Select } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 
 type Data = Record<string, string>;
 
 type Events = {
-  "mmkv-remove-key": { key: string };
-  "mmkv-data": Data;
-  "mmkv-key": { key: string; value: string | undefined };
+  "mmkv-remove-key": { key: string; instance: string };
+  "mmkv-data": Record<string, Data>;
+  "mmkv-key": { key: string; value: string | undefined; instance: string };
 };
 
 type SetParams = {
-  id?: string;
   key: string;
   value: string;
 };
 
 type Methods = {
-  "mmkv-remove-key": (key: string) => Promise<void>;
-  "mmkv-remove-all": () => Promise<void>;
-  "mmkv-set": (params: SetParams) => Promise<void>;
+  "mmkv-remove-key": (params: {
+    key: string;
+    instance: string;
+  }) => Promise<void>;
+  "mmkv-remove-all": (instance: string) => Promise<void>;
+  "mmkv-set": (params: {
+    key: string;
+    value: string;
+    instance: string;
+  }) => Promise<void>;
 };
 
+type InstanceDict = Record<string, Data>;
+
 type Row = {
-  id: string;
   key: string;
   value: string;
 };
@@ -46,7 +53,11 @@ type Row = {
 export function plugin(client: PluginClient<Events, Methods>) {
   const rows = createDataSource<Row, keyof Row>([], {
     persist: "rows",
-    key: "id",
+    key: "key",
+  });
+  const instances = createState<InstanceDict>({}, { persist: "instances" });
+  const selectedInstance = createState<string | undefined>(undefined, {
+    persist: "selectedInstance",
   });
 
   const selectedRow = createState<Row | undefined>(undefined, {
@@ -54,39 +65,76 @@ export function plugin(client: PluginClient<Events, Methods>) {
   });
 
   client.onMessage("mmkv-data", (newData) => {
-    Object.entries(newData).forEach(([key, value]) => {
-      rows.upsert({ id: key, key, value });
+    Object.entries(newData).forEach(([name, instance]) => {
+      instances.update((draft) => {
+        draft[name] = instance;
+      });
     });
   });
 
-  client.onMessage("mmkv-key", ({ key, value }) => {
+  client.onMessage("mmkv-key", ({ key, value, instance }) => {
     if (value) {
-      rows.upsert({ id: key, key, value });
+      instances.update((draft) => {
+        draft[instance][key] = value;
+      });
     } else {
-      rows.deleteByKey(key);
+      instances.update((draft) => {
+        delete draft[instance][key];
+      });
     }
   });
 
   const removeKey = (key: string) => {
-    rows.deleteByKey(key);
-    selectedRow.set(undefined);
-    client.send("mmkv-remove-key", key);
+    const instance = selectedInstance.get();
+    if (instance) {
+      selectedRow.set(undefined);
+      instances.update((draft) => {
+        delete draft[instance][key];
+      });
+      client.send("mmkv-remove-key", { key, instance });
+    }
   };
 
   const removeAll = () => {
-    rows.clear();
-    selectedRow.set(undefined);
-    client.send("mmkv-remove-all", undefined);
+    const instance = selectedInstance.get();
+    if (instance) {
+      selectedRow.set(undefined);
+      client.send("mmkv-remove-all", instance);
+      instances.update((draft) => {
+        delete draft[instance];
+      });
+      selectedInstance.set(undefined);
+    }
   };
 
   const set = (params: SetParams) => {
-    const row = { id: params.key, key: params.key, value: params.value };
-    rows.upsert(row);
-    selectedRow.set(row);
-    client.send("mmkv-set", params);
+    const instance = selectedInstance.get();
+    if (instance) {
+      client.send("mmkv-set", { ...params, instance });
+      instances.update((draft) => {
+        draft[instance][params.key] = params.value;
+      });
+      selectedRow.set(params);
+    }
   };
 
-  return { rows, selectedRow, removeKey, removeAll, set };
+  const updateRows = (update: Row[]) => {
+    rows.clear();
+    update.forEach((row) => {
+      rows.upsert(row);
+    });
+  };
+
+  return {
+    instances,
+    removeAll,
+    removeKey,
+    rows,
+    selectedInstance,
+    selectedRow,
+    set,
+    updateRows,
+  };
 }
 
 const columns: DataTableColumn<Row>[] = [
@@ -110,14 +158,34 @@ const safeJSONParse = (value: string) => {
 };
 
 function Sidebar<T extends Row>({
+  instances,
   record,
   onFinish,
+  onInstanceChange,
 }: {
   record?: T;
+  instances: InstanceDict;
   onFinish: (params: T) => void;
+  onInstanceChange: (instance: string) => void;
 }) {
   return (
     <DetailSidebar width={400}>
+      <Select
+        showSearch
+        placeholder="Select an instance"
+        optionFilterProp="children"
+        onChange={onInstanceChange}
+        onSearch={onInstanceChange}
+        filterOption={(input, option) =>
+          (option?.children as unknown as string)
+            ?.toLowerCase()
+            .indexOf(input.toLowerCase()) >= 0
+        }
+      >
+        {Object.keys(instances).map((instance) => (
+          <Select.Option value="instance">{instance}</Select.Option>
+        ))}
+      </Select>
       {record && (
         <Panel title="Payload" collapsible={false} pad="huge">
           <DataInspector
@@ -175,6 +243,7 @@ function Sidebar<T extends Row>({
 
 export function Component() {
   const instance = usePlugin(plugin);
+  const selectedInstance = useValue(instance.selectedInstance);
   const selectedRecord = useValue(instance.selectedRow);
 
   const handleSelect = useCallback(
@@ -183,6 +252,22 @@ export function Component() {
     },
     [instance.selectedRow]
   );
+
+  const handleInstanceChange = useCallback((ins: string) => {
+    instance.selectedInstance.set(ins);
+  }, []);
+
+  useEffect(() => {
+    const current = instance.instances.get();
+    if (current && selectedInstance) {
+      instance.updateRows(
+        Object.entries(current[selectedInstance]).map(([key, value]) => ({
+          key,
+          value,
+        }))
+      );
+    }
+  }, [selectedInstance]);
 
   return (
     <Layout.ScrollContainer>
@@ -217,7 +302,12 @@ export function Component() {
             </Menu.Item>
           )}
         />
-        <Sidebar record={selectedRecord} onFinish={instance.set} />
+        <Sidebar
+          record={selectedRecord}
+          onFinish={instance.set}
+          instances={instance.instances.get()}
+          onInstanceChange={handleInstanceChange}
+        />
       </Layout.Container>
     </Layout.ScrollContainer>
   );
