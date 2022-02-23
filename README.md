@@ -21,11 +21,13 @@ yarn add react-native-mmkv-flipper-plugin
 
 ```ts
 import { MMKV } from "react-native-mmkv";
-import { useMMKVFlipper } from "react-native-mmkv-flipper-plugin";
+import { initializeMMKVFlipper } from "react-native-mmkv-flipper-plugin";
 const storage = new MMKV();
 
 // add this line inside your App.tsx
-useMMKVFlipper(storage);
+if (__DEV__) {
+  initializeMMKVFlipper({ default: storage });
+}
 ```
 
 ## Screenshot
