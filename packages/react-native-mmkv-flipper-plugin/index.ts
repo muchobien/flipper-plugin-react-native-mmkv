@@ -33,16 +33,16 @@ export const initializeMMKVFlipper = (instances: MMKVInstances) => {
       onConnect(connection) {
         currentConnection = connection;
         const data = Object.entries(instances).reduce<
-          Record<string, Record<string, string | undefined>>
+          Record<string, Record<string, string | null>>
         >(
           (instancesDict, [name, instance]) => ({
             ...instancesDict,
             [name]: instance
               .getAllKeys()
-              .reduce<Record<string, string | undefined>>(
+              .reduce<Record<string, string | null>>(
                 (instanceDict, key) => ({
                   ...instanceDict,
-                  [key]: instance.getString(key),
+                  [key]: instance.getString(key) ?? null,
                 }),
                 {}
               ),

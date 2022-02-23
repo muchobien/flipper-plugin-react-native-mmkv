@@ -65,7 +65,10 @@ export function plugin(client: PluginClient<Events, Methods>) {
   });
 
   client.onMessage("mmkv-data", (newData) => {
-    Object.entries(newData).forEach(([name, instance]) => {
+    Object.entries(newData).forEach(([name, instance], index) => {
+      if (index === 0) {
+        selectedInstance.update(() => name);
+      }
       instances.update((draft) => {
         draft[name] = instance;
       });
@@ -73,12 +76,19 @@ export function plugin(client: PluginClient<Events, Methods>) {
   });
 
   client.onMessage("mmkv-key", ({ key, value, instance }) => {
+    const selected = selectedInstance.get();
     if (value) {
       instances.update((draft) => {
+        if (selected === instance) {
+          rows.upsert({ key, value });
+        }
         draft[instance][key] = value;
       });
     } else {
       instances.update((draft) => {
+        if (selected === instance) {
+          rows.deleteByKey(key);
+        }
         delete draft[instance][key];
       });
     }
@@ -89,6 +99,7 @@ export function plugin(client: PluginClient<Events, Methods>) {
     if (instance) {
       selectedRow.set(undefined);
       instances.update((draft) => {
+        rows.deleteByKey(key);
         delete draft[instance][key];
       });
       client.send("mmkv-remove-key", { key, instance });
@@ -98,12 +109,13 @@ export function plugin(client: PluginClient<Events, Methods>) {
   const removeAll = () => {
     const instance = selectedInstance.get();
     if (instance) {
-      selectedRow.set(undefined);
       client.send("mmkv-remove-all", instance);
       instances.update((draft) => {
         delete draft[instance];
+        selectedRow.set(undefined);
+        rows.clear();
+        selectedInstance.update(() => undefined);
       });
-      selectedInstance.set(undefined);
     }
   };
 
@@ -115,6 +127,7 @@ export function plugin(client: PluginClient<Events, Methods>) {
         draft[instance][params.key] = params.value;
       });
       selectedRow.set(params);
+      rows.upsert(params);
     }
   };
 
@@ -124,6 +137,8 @@ export function plugin(client: PluginClient<Events, Methods>) {
       rows.upsert(row);
     });
   };
+
+  console.log("instances", Object.keys(instances.get()));
 
   return {
     instances,
@@ -162,30 +177,35 @@ function Sidebar<T extends Row>({
   record,
   onFinish,
   onInstanceChange,
+  selectedInstance,
 }: {
   record?: T;
   instances: InstanceDict;
   onFinish: (params: T) => void;
   onInstanceChange: (instance: string) => void;
+  selectedInstance: string | undefined;
 }) {
   return (
     <DetailSidebar width={400}>
-      <Select
-        showSearch
-        placeholder="Select an instance"
-        optionFilterProp="children"
-        onChange={onInstanceChange}
-        onSearch={onInstanceChange}
-        filterOption={(input, option) =>
-          (option?.children as unknown as string)
-            ?.toLowerCase()
-            .indexOf(input.toLowerCase()) >= 0
-        }
-      >
-        {Object.keys(instances).map((instance) => (
-          <Select.Option value="instance">{instance}</Select.Option>
-        ))}
-      </Select>
+      <Panel title="Instances" collapsible={false} pad="small">
+        <Select
+          value={selectedInstance}
+          showSearch
+          placeholder="Select an instance"
+          optionFilterProp="children"
+          onChange={onInstanceChange}
+          onSearch={onInstanceChange}
+          filterOption={(input, option) =>
+            (option?.children as unknown as string)
+              ?.toLowerCase()
+              .indexOf(input.toLowerCase()) >= 0
+          }
+        >
+          {Object.keys(instances).map((instance) => (
+            <Select.Option value={instance}>{instance}</Select.Option>
+          ))}
+        </Select>
+      </Panel>
       {record && (
         <Panel title="Payload" collapsible={false} pad="huge">
           <DataInspector
@@ -254,7 +274,7 @@ export function Component() {
   );
 
   const handleInstanceChange = useCallback((ins: string) => {
-    instance.selectedInstance.set(ins);
+    instance.selectedInstance.update(() => ins);
   }, []);
 
   useEffect(() => {
@@ -303,6 +323,7 @@ export function Component() {
           )}
         />
         <Sidebar
+          selectedInstance={selectedInstance}
           record={selectedRecord}
           onFinish={instance.set}
           instances={instance.instances.get()}
