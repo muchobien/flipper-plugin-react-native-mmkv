@@ -1,6 +1,5 @@
 import type { Flipper } from "react-native-flipper";
 import type { MMKV } from "react-native-mmkv";
-import { useEffect, useRef } from "react";
 let FlipperModule: typeof import("react-native-flipper") | undefined;
 
 try {
@@ -9,7 +8,17 @@ try {
   // noop
 }
 
-export const useMMKVFlipper = (instance: MMKV) => {
+type MMKVInstances = Record<string, MMKV>;
+
+type InstanceEntry = {
+  key: string;
+  value: string;
+  instance: string;
+};
+
+let currentConnection: Flipper.FlipperConnection | null = null;
+
+export const initializeMMKVFlipper = (instances: MMKVInstances) => {
   if (FlipperModule == null) {
     throw new Error(
       "Please install the 'react-native-flipper' package in your project to use Flipper integration for 'react-native-mmkv'"
@@ -18,49 +27,63 @@ export const useMMKVFlipper = (instance: MMKV) => {
 
   const { addPlugin } = FlipperModule;
 
-  const connectionRef = useRef<Flipper.FlipperConnection>();
-
-  useEffect(() => {
+  if (currentConnection === null) {
     addPlugin({
       getId: () => "rn-mmkv",
       onConnect(connection) {
-        connectionRef.current = connection;
-
-        const data = instance
-          .getAllKeys()
-          .reduce(
-            (acc, key) => ({ ...acc, [key]: instance.getString(key) }),
-            {} as Record<string, string | undefined>
-          );
+        currentConnection = connection;
+        const data = Object.entries(instances).reduce<
+          Record<string, Record<string, string | null>>
+        >(
+          (instancesDict, [name, instance]) => ({
+            ...instancesDict,
+            [name]: instance
+              .getAllKeys()
+              .reduce<Record<string, string | null>>(
+                (instanceDict, key) => ({
+                  ...instanceDict,
+                  [key]: instance.getString(key) ?? null,
+                }),
+                {}
+              ),
+          }),
+          {}
+        );
 
         connection.send("mmkv-data", data);
 
-        instance.addOnValueChangedListener((key) => {
-          connectionRef.current?.send("mmkv-key", {
-            key,
-            value: instance.getString(key),
+        Object.entries(instances).forEach(([name, instance]) => {
+          instance.addOnValueChangedListener((key) => {
+            currentConnection?.send("mmkv-key", {
+              key,
+              value: instance.getString(key),
+              instance: name,
+            });
           });
         });
 
-        connection.receive("mmkv-remove-key", (key: string) => {
-          instance.delete(key);
-        });
-
         connection.receive(
-          "mmkv-set",
-          ({ key, value }: { key: string; value: string }) => {
-            instance.set(key, value);
+          "mmkv-remove-key",
+          ({ key, instance }: Omit<InstanceEntry, "value">) => {
+            instances[instance].delete(key);
           }
         );
 
-        connection.receive("mmkv-remove-all", () => {
-          instance.clearAll();
+        connection.receive(
+          "mmkv-set",
+          ({ key, value, instance }: InstanceEntry) => {
+            instances[instance].set(key, value);
+          }
+        );
+
+        connection.receive("mmkv-remove-all", (instance: string) => {
+          instances[instance].clearAll();
         });
       },
       onDisconnect() {
-        connectionRef.current = undefined;
+        currentConnection = null;
       },
       runInBackground: () => false,
     });
-  }, [addPlugin, instance]);
+  }
 };
